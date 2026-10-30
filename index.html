@@ -187,6 +187,7 @@
     .field input, .field select, .field textarea { width: 100%; border: 1px solid #e3e8e4; border-radius: 8px; padding: 10px 11px; color: var(--ink); background: #fff; font-size: 11px; outline: none; }
     .field textarea { resize: vertical; min-height: 76px; }
     .field input:focus, .field select:focus, .field textarea:focus { border-color: #73ad92; box-shadow: 0 0 0 3px rgba(39,118,91,.09); }
+    .attachment-link { color: var(--green-dark); font-size: 11px; font-weight: 700; }
     .form-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
     .secondary-button { border: 1px solid var(--line); border-radius: 8px; padding: 10px 13px; background: white; color: #5f6b65; font-size: 11px; font-weight: 650; }
     .toast { position: fixed; z-index: 30; right: 24px; bottom: 24px; max-width: min(360px, calc(100vw - 32px)); padding: 12px 16px; border: 1px solid #d5e8dc; border-radius: 10px; background: #fff; color: var(--green-dark); box-shadow: var(--shadow); font-size: 12px; font-weight: 650; opacity: 0; pointer-events: none; transform: translateY(8px); transition: opacity .2s, transform .2s; }
@@ -357,7 +358,7 @@
           <div class="stat-grid" id="leave-stat-grid"></div>
           <section class="panel directory-panel">
             <div class="panel-heading"><div><div class="panel-title">Request history</div><div class="panel-caption">Your submitted requests and their latest status</div></div><div class="filter-row"><select class="select-input" id="status-filter" aria-label="Filter requests by status"><option value="all">All statuses</option><option value="Pending">Pending</option><option value="Approved">Approved</option><option value="Rejected">Rejected</option></select></div></div>
-            <div class="table-wrap"><table><thead><tr><th>Leave type</th><th>Dates</th><th>Days</th><th>Submitted</th><th>Status</th></tr></thead><tbody id="all-requests"></tbody></table></div>
+            <div class="table-wrap"><table><thead><tr><th>Leave type</th><th>Dates</th><th>Days</th><th>Submitted</th><th>Attachment</th><th>Status</th></tr></thead><tbody id="all-requests"></tbody></table></div>
           </section>
         </section>
 
@@ -424,6 +425,7 @@
           <div class="preview-item"><div class="preview-label" id="preview-after-label">Balance after approval</div><div class="preview-value" id="preview-after">Select dates</div></div>
         </div>
         <div class="field"><label for="reason">Note for your manager <span style="color:#9aa39e;font-weight:400">(optional)</span></label><textarea id="reason" maxlength="240" placeholder="Add any context that will help your manager review this request…"></textarea></div>
+        <div class="field"><label for="leave-attachment">Supporting attachment <span id="attachment-required-note" style="color:#9aa39e;font-weight:400">(optional)</span></label><input id="leave-attachment" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"><div class="panel-caption" id="attachment-help" style="line-height:1.5">Optional for this leave type. PDF, PNG, or JPEG files are accepted and saved in this browser.</div></div>
         <div class="form-footer"><button type="button" class="secondary-button" id="cancel-modal">Cancel</button><button type="submit" class="primary-button">Submit request</button></div>
       </form>
     </div>
@@ -542,9 +544,11 @@
     function persistRequests() {
       try {
         localStorage.setItem(storageKey, JSON.stringify(requests));
+        return true;
       } catch (error) {
         console.error("Could not save leave requests:", error);
         showToast("Your change could not be saved in this browser.");
+        return false;
       }
     }
     function escapeHTML(value) {
@@ -553,6 +557,28 @@
     function formatDate(dateString, options = { month: "short", day: "numeric" }) {
       const date = new Date(dateString + "T12:00:00");
       return Number.isNaN(date.getTime()) ? "—" : new Intl.DateTimeFormat("en", options).format(date);
+    }
+    function attachmentLink(attachment) {
+      if (!attachment || typeof attachment.name !== "string" || typeof attachment.dataUrl !== "string") return "—";
+      const allowedTypes = ["application/pdf", "image/png", "image/jpeg"];
+      if (!allowedTypes.some(type => attachment.dataUrl.startsWith(`data:${type};base64,`))) return "—";
+      return `<a class="attachment-link" href="${escapeHTML(attachment.dataUrl)}" download="${escapeHTML(attachment.name)}">Download ${escapeHTML(attachment.name)}</a>`;
+    }
+    function readAttachment(file) {
+      const allowedTypes = ["application/pdf", "image/png", "image/jpeg"];
+      if (!allowedTypes.includes(file.type)) return Promise.reject(new Error("Upload a PDF, PNG, or JPEG attachment."));
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (typeof reader.result !== "string") {
+            reject(new Error("The selected attachment could not be read."));
+            return;
+          }
+          resolve({ name: file.name, type: file.type, dataUrl: reader.result });
+        };
+        reader.onerror = () => reject(new Error("The selected attachment could not be read."));
+        reader.readAsDataURL(file);
+      });
     }
     function dateRange(request) {
       if (request.start === request.end) return formatDate(request.start);
@@ -662,10 +688,10 @@
     function renderRequestRows(targetId, rows, withSubmitted = false) {
       const target = document.getElementById(targetId);
       if (!rows.length) {
-        target.innerHTML = `<tr><td colspan="${withSubmitted ? 5 : 4}"><div class="empty-state"><strong>No leave requests yet</strong>When you request time off, it will show up here.</div></td></tr>`;
+        target.innerHTML = `<tr><td colspan="${withSubmitted ? 6 : 5}"><div class="empty-state"><strong>No leave requests yet</strong>When you request time off, it will show up here.</div></td></tr>`;
         return;
       }
-      target.innerHTML = rows.map(r => `<tr><td class="type-cell">${escapeHTML(r.type)}</td><td><span class="date-range">${dateRange(r)}<small>${formatDate(r.start, { month: "long", year: "numeric" })}</small></span></td><td>${Number(r.days) || 0} ${Number(r.days) === 1 ? "day" : "days"}</td>${withSubmitted ? `<td>${formatDate(r.submitted)}</td>` : ""}<td>${statusBadge(r.status)}</td></tr>`).join("");
+      target.innerHTML = rows.map(r => `<tr><td class="type-cell">${escapeHTML(r.type)}</td><td><span class="date-range">${dateRange(r)}<small>${formatDate(r.start, { month: "long", year: "numeric" })}</small></span></td><td>${Number(r.days) || 0} ${Number(r.days) === 1 ? "day" : "days"}</td>${withSubmitted ? `<td>${formatDate(r.submitted)}</td>` : ""}<td>${attachmentLink(r.attachment)}</td><td>${statusBadge(r.status)}</td></tr>`).join("");
     }
     function renderApprovalItems(targetId, list, compact = false) {
       const target = document.getElementById(targetId);
@@ -679,6 +705,7 @@
           <div class="${compact ? "approval-name" : "directory-person-name"}">${escapeHTML(r.person)}</div>
           <div class="${compact ? "approval-detail" : "directory-person-detail"}">${escapeHTML(r.type)} · ${Number(r.days) || 0} ${Number(r.days) === 1 ? "day" : "days"} · ${dateRange(r)}</div>
           ${compact ? `<div class="approval-date">Requested ${formatDate(r.submitted)}${r.reason ? ` · “${escapeHTML(r.reason)}”` : ""}</div>` : `<div class="approval-date">${r.reason ? escapeHTML(r.reason) : "No additional note"} · Submitted ${formatDate(r.submitted)}</div>`}
+          ${r.attachment ? `<div>${attachmentLink(r.attachment)}</div>` : ""}
           <div class="approval-actions"><button class="mini-button approve" data-action="Approved" data-id="${escapeHTML(r.id)}">Approve</button><button class="mini-button reject" data-action="Rejected" data-id="${escapeHTML(r.id)}">Decline</button></div>
         </div>
       </article>`).join("");
@@ -855,7 +882,7 @@
       ).sort((a, b) => a.submitted.localeCompare(b.submitted));
       renderStats("stat-grid");
       renderStats("leave-stat-grid");
-      renderRequestRows("all-requests", filteredMine());
+      renderRequestRows("all-requests", filteredMine(), true);
       renderApprovalItems("approval-list", pending.slice(0, 2), true);
       renderApprovalItems("all-approvals", pending, false);
       document.getElementById("approval-count").textContent = pending.length;
@@ -911,7 +938,16 @@
         normalizeGender(gender) === "Female" ? "Maternity leave is available for this employee."
           : normalizeGender(gender) === "Male" ? "Paternity leave is available for this employee."
             : "Set your gender in My leave to see the relevant parental leave type.";
+      updateAttachmentRequirement();
       updateLeavePreview();
+    }
+    function updateAttachmentRequirement() {
+      const isSickLeave = document.getElementById("leave-type").value === "Sick leave";
+      document.getElementById("leave-attachment").required = isSickLeave;
+      document.getElementById("attachment-required-note").textContent = isSickLeave ? "(required)" : "(optional)";
+      document.getElementById("attachment-help").textContent = isSickLeave
+        ? "Required for sick leave. PDF, PNG, or JPEG files are accepted and saved in this browser."
+        : "Optional for this leave type. PDF, PNG, or JPEG files are accepted and saved in this browser.";
     }
     function updateLeavePreview() {
       const start = document.getElementById("start-date").value;
@@ -1080,8 +1116,11 @@
     document.getElementById("start-date").addEventListener("change", event => { document.getElementById("end-date").min = event.target.value; });
     document.getElementById("start-date").addEventListener("input", updateLeavePreview);
     document.getElementById("end-date").addEventListener("input", updateLeavePreview);
-    document.getElementById("leave-type").addEventListener("change", updateLeavePreview);
-    document.getElementById("request-form").addEventListener("submit", event => {
+    document.getElementById("leave-type").addEventListener("change", () => {
+      updateAttachmentRequirement();
+      updateLeavePreview();
+    });
+    document.getElementById("request-form").addEventListener("submit", async event => {
       event.preventDefault();
       const employee = displayEmployee();
       if (!isEligibleToApply(employee.name)) {
@@ -1104,19 +1143,37 @@
         showToast("That leave type is not available for the employee's recorded gender.");
         return;
       }
+      const attachmentFile = document.getElementById("leave-attachment").files[0];
+      if (type === "Sick leave" && !attachmentFile) {
+        showToast("A supporting attachment is required for sick leave.");
+        return;
+      }
       const balance = leaveBalance(employee.name, type);
       if (balance !== null && days > balance) {
         showToast(`Your ${type.toLowerCase()} request exceeds your available balance.`);
         return;
+      }
+      let attachment;
+      if (attachmentFile) {
+        try {
+          attachment = await readAttachment(attachmentFile);
+        } catch (error) {
+          showToast(error.message);
+          return;
+        }
       }
       requests.unshift({
         id: `request-${Date.now()}`, person: employee.name, initials: employee.initials, department: employee.department,
         managerEmail: employee.managerEmail || departmentManagers[employee.department] || "manager@kara.com",
         type, start, end, days,
         submitted: new Date().toISOString().slice(0, 10), status: "Pending",
-        reason: document.getElementById("reason").value.trim()
+        reason: document.getElementById("reason").value.trim(),
+        ...(attachment ? { attachment } : {})
       });
-      persistRequests();
+      if (!persistRequests()) {
+        requests.shift();
+        return;
+      }
       render();
       event.target.reset();
       closeModal();
@@ -1141,8 +1198,12 @@
           showToast(`${request.person} does not have enough ${request.type.toLowerCase()} available for this request.`);
           return;
         }
+        const previousStatus = request.status;
         request.status = action.dataset.action;
-        persistRequests();
+        if (!persistRequests()) {
+          request.status = previousStatus;
+          return;
+        }
         render();
         showToast(`${request.person}'s request ${request.status.toLowerCase()}.`);
         return;
